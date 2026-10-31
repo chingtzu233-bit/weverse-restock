@@ -1,0 +1,65 @@
+name: Weverse stock monitor
+
+on:
+  schedule:
+    - cron: '2-57/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '先 pair，再 test-notification，最後 check'
+        type: choice
+        options:
+          - check
+          - pair
+          - test-notification
+        default: check
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weverse-stock-61792
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    # Standard hosted runner; use a PUBLIC repository for free compute.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python dependency
+        run: python -m pip install -r requirements.txt
+      - name: Install Chromium for stock checks
+        if: ${{ github.event_name == 'schedule' || inputs.mode == 'check' }}
+        run: python -m playwright install --with-deps chromium
+      - name: Restore previous stock status
+        if: ${{ github.event_name == 'schedule' || inputs.mode == 'check' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: state/stock.json
+          key: weverse-stock-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            weverse-stock-v1-
+      - name: Run selected mode
+        env:
+          MODE: ${{ inputs.mode || 'check' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAIRING_CODE: ${{ secrets.PAIRING_CODE }}
+        run: |
+          case "$MODE" in
+            pair) python monitor.py --pair ;;
+            test-notification) python monitor.py --test-notification ;;
+            check) python monitor.py ;;
+            *) exit 1 ;;
+          esac
+      - name: Save status even if the check failed
+        if: ${{ always() && (github.event_name == 'schedule' || inputs.mode == 'check') && hashFiles('state/stock.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: state/stock.json
+          key: weverse-stock-v1-${{ github.run_id }}-${{ github.run_attempt }}
